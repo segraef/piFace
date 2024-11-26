@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Take a Picture</title>
+</head>
+<body>
+  <h1>Live Stream</h1>
+  <img src="{{ url_for('video_feed') }}" width="480" height="270">
+    <h1>Take a Picture</h1>
+    <form action="/takepic" method="get">
+        <button type="submit">Take Picture</button>
+    </form>
+    <a href="/livestream">Go to Live Stream</a>
+</body>
+</html>
