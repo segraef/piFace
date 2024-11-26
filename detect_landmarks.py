@@ -5,7 +5,11 @@ import numpy as np
 # Load facial landmark detector and target image
 predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
 detector = dlib.get_frontal_face_detector()
-target_image = cv2.imread("known_faces/Seb.jpg")
+target_image = cv2.imread("known_faces/Laura.jpg")
+
+if target_image is None:
+    print("Error: Target image not found.")
+    exit()
 
 # Function to get facial landmarks
 def get_landmarks(image):
@@ -14,67 +18,84 @@ def get_landmarks(image):
     if len(faces) == 0:
         return None
     landmarks = predictor(gray, faces[0])
-    return np.array([[p.x, p.y] for p in landmarks.parts()])
+    return np.array([[p.x, p.y] for p in landmarks.parts()], dtype=np.float32)
 
 # Function to apply affine transform to a triangle
 def apply_affine_transform(src, src_tri, dst_tri, size):
     warp_mat = cv2.getAffineTransform(np.float32(src_tri), np.float32(dst_tri))
-    dst = cv2.warpAffine(src, warp_mat, (size[0], size[1]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-    return dst
+    return cv2.warpAffine(src, warp_mat, (size[0], size[1]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
 
-# Function to warp triangles
+# Function to check if two rectangles intersect
+def rectangles_intersect(rect1, rect2):
+    x1, y1, w1, h1 = rect1
+    x2, y2, w2, h2 = rect2
+    return not (x1 + w1 <= x2 or x2 + w2 <= x1 or y1 + h1 <= y2 or y2 + h2 <= y1)
+
+# Function to warp the target face
 def warp_face(source_landmarks, target_landmarks, target_image, frame):
-    # Ensure landmarks are valid and correctly formatted
-    if target_landmarks is None:
-        print("No landmarks found in the target image.")
+    if len(source_landmarks) != len(target_landmarks):
+        print("Error: Source and target landmarks count mismatch.")
         return np.zeros_like(frame)
-
-    target_landmarks = np.array(target_landmarks, dtype=np.float32)
-    source_landmarks = np.array(source_landmarks, dtype=np.float32)
 
     # Define the Delaunay triangulation
     rect = cv2.boundingRect(target_landmarks)
     subdiv = cv2.Subdiv2D(rect)
     for pt in target_landmarks:
-        subdiv.insert((float(pt[0]), float(pt[1])))
+        subdiv.insert((pt[0], pt[1]))
 
     # Retrieve triangles from Delaunay
     triangles = subdiv.getTriangleList()
     triangles = np.array(triangles, dtype=np.int32)
 
-    # Warp each triangle
+    # Initialize the warped image
     warped_image = np.zeros_like(frame)
+
     for triangle in triangles:
         pts = triangle.reshape(3, 2)
-        if cv2.boundingRect(pts) in rect:
-            idx = [np.where((target_landmarks == pt).all(axis=1))[0][0] for pt in pts]
-            src_tri = source_landmarks[idx].astype(np.int32)
-            dst_tri = target_landmarks[idx].astype(np.int32)
+        triangle_rect = cv2.boundingRect(pts)
 
-            # Warp each triangle
-            src_rect = cv2.boundingRect(np.array([src_tri]))
-            dst_rect = cv2.boundingRect(np.array([dst_tri]))
-            src_cropped = target_image[src_rect[1]:src_rect[1] + src_rect[3], src_rect[0]:src_rect[0] + src_rect[2]]
+        if not rectangles_intersect(triangle_rect, rect):
+            continue
 
-            # Normalize coordinates to the cropped region
-            src_tri_cropped = src_tri - src_rect[:2]
-            dst_tri_cropped = dst_tri - dst_rect[:2]
+        # Find the corresponding indices of the triangle vertices
+        indices = []
+        for pt in pts:
+            idx = np.where((target_landmarks == pt).all(axis=1))[0]
+            if len(idx) > 0:
+                indices.append(idx[0])
+        if len(indices) != 3:
+            continue
 
-            # Apply affine transform to the triangle
-            size = (dst_rect[2], dst_rect[3])
-            warped_triangle = apply_affine_transform(src_cropped, src_tri_cropped, dst_tri_cropped, size)
+        # Source and destination triangles
+        src_tri = source_landmarks[indices].astype(np.int32)
+        dst_tri = target_landmarks[indices].astype(np.int32)
 
-            # Mask for the triangle
-            mask = np.zeros((dst_rect[3], dst_rect[2]), dtype=np.uint8)
-            cv2.fillConvexPoly(mask, np.int32(dst_tri_cropped), 255)
+        # Bounding rectangles
+        src_rect = cv2.boundingRect(np.array([src_tri]))
+        dst_rect = cv2.boundingRect(np.array([dst_tri]))
 
-            # Overlay the warped triangle on the output image
-            warped_triangle = cv2.bitwise_and(warped_triangle, warped_triangle, mask=mask)
-            warped_image[dst_rect[1]:dst_rect[1] + dst_rect[3], dst_rect[0]:dst_rect[0] + dst_rect[2]] = \
-                cv2.add(warped_image[dst_rect[1]:dst_rect[1] + dst_rect[3], dst_rect[0]:dst_rect[0] + dst_rect[2]], warped_triangle)
+        if src_rect[2] <= 0 or src_rect[3] <= 0 or dst_rect[2] <= 0 or dst_rect[3] <= 0:
+            continue
+
+        # Crop and normalize triangles
+        src_cropped = frame[src_rect[1]:src_rect[1] + src_rect[3], src_rect[0]:src_rect[0] + src_rect[2]]
+        src_tri_cropped = src_tri - src_rect[:2]
+        dst_tri_cropped = dst_tri - dst_rect[:2]
+
+        # Apply affine transformation
+        size = (dst_rect[2], dst_rect[3])
+        warped_triangle = apply_affine_transform(src_cropped, src_tri_cropped, dst_tri_cropped, size)
+
+        # Create a mask for the triangle
+        mask = np.zeros((dst_rect[3], dst_rect[2]), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, np.int32(dst_tri_cropped), 255)
+
+        # Overlay the warped triangle on the output image
+        warped_triangle = cv2.bitwise_and(warped_triangle, warped_triangle, mask=mask)
+        warped_image[dst_rect[1]:dst_rect[1] + dst_rect[3], dst_rect[0]:dst_rect[0] + dst_rect[2]] = \
+            cv2.add(warped_image[dst_rect[1]:dst_rect[1] + dst_rect[3], dst_rect[0]:dst_rect[0] + dst_rect[2]], warped_triangle)
 
     return warped_image
-
 
 # Start webcam capture
 cap = cv2.VideoCapture(0)
@@ -97,7 +118,7 @@ while True:
     if source_landmarks is not None:
         # Draw landmarks on the webcam feed
         for (x, y) in source_landmarks:
-            cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+            cv2.circle(frame, (int(x), int(y)), 2, (0, 255, 0), -1)
 
     if source_landmarks is not None and target_landmarks is not None:
         # Warp the target face to follow your facial movements
@@ -118,4 +139,3 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
-
