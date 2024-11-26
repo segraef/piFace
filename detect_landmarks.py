@@ -94,11 +94,19 @@ while True:
     source_landmarks = get_landmarks(frame)
     target_landmarks = get_landmarks(target_image)
 
+    if source_landmarks is not None:
+        # Draw landmarks on the webcam feed
+        for (x, y) in source_landmarks:
+            cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+
     if source_landmarks is not None and target_landmarks is not None:
         # Warp the target face to follow your facial movements
         warped_face = warp_face(source_landmarks, target_landmarks, target_image, frame)
 
-        # Overlay warped face on the original frame
+        # Display the warped still image in a separate window
+        cv2.imshow("Warped Still Image", warped_face)
+
+        # Overlay warped face on the webcam frame (optional)
         frame = cv2.addWeighted(frame, 0.6, warped_face, 0.4, 0)
 
     # Display the frame
@@ -110,3 +118,4 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+
